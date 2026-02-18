@@ -18,7 +18,7 @@ jobs:
       - name: Checkout build tool
         uses: actions/checkout@v4
         with:
-          repository: Premmerce-WP/premmerce-plugin-build
+          repository: polevaultweb/premmerce-plugin-build
           path: build-tool
           token: ${{ secrets.GH_PAT }}
 
