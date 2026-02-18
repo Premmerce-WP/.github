@@ -52,10 +52,8 @@ jobs:
       # --- Build ---
       - name: Build plugin
         run: |
-          mkdir -p build-tool/plugins
-          cp -r $GITHUB_WORKSPACE build-tool/plugins/${{ inputs.plugin-slug }}
-          # Remove the build-tool copy from inside the plugin copy
-          rm -rf build-tool/plugins/${{ inputs.plugin-slug }}/build-tool
+          mkdir -p build-tool/plugins/${{ inputs.plugin-slug }}
+          rsync -a --exclude=build-tool $GITHUB_WORKSPACE/ build-tool/plugins/${{ inputs.plugin-slug }}/
           cd build-tool
           php console plugin:build plugins/${{ inputs.plugin-slug }}
 
