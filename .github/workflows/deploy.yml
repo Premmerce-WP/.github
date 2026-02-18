@@ -1,0 +1,192 @@
+name: Deploy Plugin
+
+on:
+  workflow_call:
+    inputs:
+      plugin-slug:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # --- Setup ---
+      - name: Checkout plugin code
+        uses: actions/checkout@v4
+
+      - name: Checkout build tool
+        uses: actions/checkout@v4
+        with:
+          repository: Premmerce-WP/premmerce-plugin-build
+          path: build-tool
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer, php-cs-fixer
+          extensions: curl, json, zip
+
+      - name: Install build tool dependencies
+        run: cd build-tool && composer install --no-dev --no-interaction
+
+      # --- Read config ---
+      - name: Read release config
+        id: config
+        run: |
+          echo "freemius_id=$(jq -r '.freemius_id // empty' release.json)" >> $GITHUB_OUTPUT
+          echo "plugin_type=$(jq -r '.type' release.json)" >> $GITHUB_OUTPUT
+          echo "wordpress_org=$(jq -r '.channels.wordpress_org' release.json)" >> $GITHUB_OUTPUT
+          echo "woocommerce=$(jq -r '.channels.woocommerce' release.json)" >> $GITHUB_OUTPUT
+          echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          echo "Plugin: ${{ inputs.plugin-slug }}"
+          echo "Version: ${GITHUB_REF_NAME}"
+          echo "Type: $(jq -r '.type' release.json)"
+          echo "Channels: Freemius=$(jq -r '.freemius_id // "none"' release.json) WP.org=$(jq -r '.channels.wordpress_org' release.json) WooCommerce=$(jq -r '.channels.woocommerce' release.json)"
+
+      # --- Build ---
+      - name: Build plugin
+        run: |
+          mkdir -p build-tool/plugins
+          cp -r $GITHUB_WORKSPACE build-tool/plugins/${{ inputs.plugin-slug }}
+          # Remove the build-tool copy from inside the plugin copy
+          rm -rf build-tool/plugins/${{ inputs.plugin-slug }}/build-tool
+          cd build-tool
+          php console plugin:build plugins/${{ inputs.plugin-slug }}
+
+      # --- Freemius Upload ---
+      - name: Upload to Freemius
+        id: freemius-upload
+        if: steps.config.outputs.freemius_id != ''
+        run: |
+          cd build-tool
+          RESPONSE=$(php console plugin:freemius-tag \
+            output/freemius/${{ inputs.plugin-slug }}.zip \
+            --dev_id=${{ secrets.FREEMIUS_DEV_ID }} \
+            --public_key=${{ secrets.FREEMIUS_PUBLIC_KEY }} \
+            --secret_key=${{ secrets.FREEMIUS_SECRET_KEY }} \
+            --plugin_id=${{ steps.config.outputs.freemius_id }})
+          echo "Freemius response: $RESPONSE"
+          TAG_ID=$(echo "$RESPONSE" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+          if [ -z "$TAG_ID" ]; then
+            echo "::error::Failed to parse tag ID from Freemius response"
+            echo "$RESPONSE"
+            exit 1
+          fi
+          echo "tag_id=$TAG_ID" >> $GITHUB_OUTPUT
+          echo "Freemius tag ID: $TAG_ID"
+
+      # --- Download free version from Freemius (free+pro only) ---
+      # Free+pro plugins need Freemius-generated free version for WP.org
+      # Free-only plugins skip this and use built output directly
+      - name: Download free version from Freemius
+        id: freemius-download
+        if: steps.freemius-upload.outputs.tag_id != '' && steps.config.outputs.wordpress_org == 'true' && steps.config.outputs.plugin_type == 'free_pro'
+        run: |
+          cd build-tool
+          TAG_ID=${{ steps.freemius-upload.outputs.tag_id }}
+          PLUGIN_ID=${{ steps.config.outputs.freemius_id }}
+          MAX_ATTEMPTS=20
+          ATTEMPT=0
+          echo "Waiting for Freemius to process free version (tag $TAG_ID)..."
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS..."
+            php console plugin:freemius-download \
+              $TAG_ID output/wp \
+              --plugin_id=$PLUGIN_ID \
+              --dev_id=${{ secrets.FREEMIUS_DEV_ID }} \
+              --public_key=${{ secrets.FREEMIUS_PUBLIC_KEY }} \
+              --secret_key=${{ secrets.FREEMIUS_SECRET_KEY }} 2>/dev/null && break
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "Not ready yet, waiting 15s..."
+              sleep 15
+            fi
+          done
+          if [ ! -f "output/wp/${PLUGIN_ID}-free.zip" ]; then
+            echo "::error::Failed to download free version after $MAX_ATTEMPTS attempts"
+            exit 1
+          fi
+          unzip -oq "output/wp/${PLUGIN_ID}-free.zip" -d output/wp
+          echo "free_version_ready=true" >> $GITHUB_OUTPUT
+          echo "Free version downloaded and extracted"
+
+      # --- WordPress.org SVN ---
+      - name: Publish to WordPress.org
+        if: steps.config.outputs.wordpress_org == 'true'
+        run: |
+          sudo apt-get install -y subversion
+          VERSION=${{ steps.config.outputs.version }}
+          SLUG=${{ inputs.plugin-slug }}
+
+          # Determine source: Freemius free zip (free+pro) or built output (free-only)
+          if [ "${{ steps.freemius-download.outputs.free_version_ready }}" == "true" ]; then
+            BUILD_DIR="build-tool/output/wp/$SLUG"
+          else
+            BUILD_DIR="build-tool/output/freemius/$SLUG"
+          fi
+
+          echo "Publishing $SLUG v$VERSION to WordPress.org from $BUILD_DIR"
+
+          # Checkout SVN repo (trunk + latest tag only for speed)
+          svn co "https://plugins.svn.wordpress.org/$SLUG" svn-repo \
+            --depth immediates \
+            --username "${{ secrets.WORDPRESS_ORG_SVN_USERNAME }}" \
+            --password "${{ secrets.WORDPRESS_ORG_SVN_PASSWORD }}" \
+            --no-auth-cache
+
+          # Fetch trunk and tags listing
+          cd svn-repo
+          svn update trunk --set-depth infinity
+          svn update tags --set-depth immediates
+          cd ..
+
+          # Use build tool to prepare SVN (copies to trunk, creates tag)
+          cd build-tool
+          php console plugin:publish ../$BUILD_DIR ../svn-repo --ver=$VERSION
+          cd ..
+
+          # Commit to WordPress.org
+          cd svn-repo
+          svn commit -m "Release $VERSION" \
+            --username "${{ secrets.WORDPRESS_ORG_SVN_USERNAME }}" \
+            --password "${{ secrets.WORDPRESS_ORG_SVN_PASSWORD }}" \
+            --no-auth-cache
+
+      # --- WooCommerce build (artifact only, manual upload to woo.com) ---
+      - name: Build WooCommerce version
+        if: steps.config.outputs.woocommerce == 'true'
+        run: |
+          cd build-tool
+          php console plugin:build plugins/${{ inputs.plugin-slug }} --woocommerce
+
+      - name: Upload WooCommerce artifact
+        if: steps.config.outputs.woocommerce == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: woocommerce-build
+          path: build-tool/output/woocommerce_market/*.zip
+
+      # --- GitHub Release ---
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build-tool/output/freemius/*.zip
+          generate_release_notes: true
+
+      # --- Mark Freemius tag as released (LAST STEP) ---
+      - name: Mark Freemius tag as released
+        if: steps.freemius-upload.outputs.tag_id != ''
+        run: |
+          cd build-tool
+          RESPONSE=$(php console plugin:freemius-release \
+            ${{ steps.freemius-upload.outputs.tag_id }} \
+            --dev_id=${{ secrets.FREEMIUS_DEV_ID }} \
+            --public_key=${{ secrets.FREEMIUS_PUBLIC_KEY }} \
+            --secret_key=${{ secrets.FREEMIUS_SECRET_KEY }} \
+            --plugin_id=${{ steps.config.outputs.freemius_id }})
+          echo "Freemius release response: $RESPONSE"
+          echo "Tag ${{ steps.freemius-upload.outputs.tag_id }} marked as released"
