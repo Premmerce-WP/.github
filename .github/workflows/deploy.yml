@@ -124,9 +124,9 @@ jobs:
 
           # Determine source: Freemius free zip (free+pro) or built output (free-only)
           if [ "${{ steps.freemius-download.outputs.free_version_ready }}" == "true" ]; then
-            BUILD_DIR="build-tool/output/wp/$SLUG"
+            BUILD_DIR=$(ls -d build-tool/output/wp/*/ | head -1)
           else
-            BUILD_DIR="build-tool/output/freemius/$SLUG"
+            BUILD_DIR=$(ls -d build-tool/output/freemius/*/ | head -1)
           fi
 
           echo "Publishing $SLUG v$VERSION to WordPress.org from $BUILD_DIR"
