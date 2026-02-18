@@ -37,6 +37,7 @@ jobs:
         id: config
         run: |
           echo "freemius_id=$(jq -r '.freemius_id // empty' release.json)" >> $GITHUB_OUTPUT
+          echo "freemius_upload=$(jq -r '.channels.freemius' release.json)" >> $GITHUB_OUTPUT
           echo "plugin_type=$(jq -r '.type' release.json)" >> $GITHUB_OUTPUT
           echo "wordpress_org=$(jq -r '.channels.wordpress_org' release.json)" >> $GITHUB_OUTPUT
           echo "woocommerce=$(jq -r '.channels.woocommerce' release.json)" >> $GITHUB_OUTPUT
@@ -44,7 +45,9 @@ jobs:
           echo "Plugin: ${{ inputs.plugin-slug }}"
           echo "Version: ${GITHUB_REF_NAME}"
           echo "Type: $(jq -r '.type' release.json)"
-          echo "Channels: Freemius=$(jq -r '.freemius_id // "none"' release.json) WP.org=$(jq -r '.channels.wordpress_org' release.json) WooCommerce=$(jq -r '.channels.woocommerce' release.json)"
+          echo "Freemius upload: $(jq -r '.channels.freemius' release.json)"
+          echo "WP.org: $(jq -r '.channels.wordpress_org' release.json)"
+          echo "WooCommerce: $(jq -r '.channels.woocommerce' release.json)"
 
       # --- Build ---
       - name: Build plugin
@@ -56,10 +59,10 @@ jobs:
           cd build-tool
           php console plugin:build plugins/${{ inputs.plugin-slug }}
 
-      # --- Freemius Upload ---
+      # --- Freemius Upload (Revenues plan only) ---
       - name: Upload to Freemius
         id: freemius-upload
-        if: steps.config.outputs.freemius_id != ''
+        if: steps.config.outputs.freemius_upload == 'true'
         run: |
           cd build-tool
           RESPONSE=$(php console plugin:freemius-tag \
@@ -78,12 +81,12 @@ jobs:
           echo "tag_id=$TAG_ID" >> $GITHUB_OUTPUT
           echo "Freemius tag ID: $TAG_ID"
 
-      # --- Download free version from Freemius (free+pro only) ---
-      # Free+pro plugins need Freemius-generated free version for WP.org
-      # Free-only plugins skip this and use built output directly
+      # --- Download free version from Freemius (Revenues plan + WP.org only) ---
+      # Revenues plan plugins need Freemius-generated free version for WP.org
+      # Hobby/Free plan plugins skip this and use built output directly for SVN
       - name: Download free version from Freemius
         id: freemius-download
-        if: steps.freemius-upload.outputs.tag_id != '' && steps.config.outputs.wordpress_org == 'true' && steps.config.outputs.plugin_type == 'free_pro'
+        if: steps.freemius-upload.outputs.tag_id != '' && steps.config.outputs.wordpress_org == 'true'
         run: |
           cd build-tool
           TAG_ID=${{ steps.freemius-upload.outputs.tag_id }}
@@ -177,7 +180,7 @@ jobs:
             build-tool/output/freemius/*.zip
           generate_release_notes: true
 
-      # --- Mark Freemius tag as released (LAST STEP) ---
+      # --- Mark Freemius tag as released (LAST STEP, Revenues plan only) ---
       - name: Mark Freemius tag as released
         if: steps.freemius-upload.outputs.tag_id != ''
         run: |
