@@ -181,11 +181,17 @@ jobs:
           path: build-tool/output/woocommerce_market/*.zip
 
       # --- GitHub Release ---
+      - name: Find build zip
+        id: find-zip
+        run: |
+          ZIP=$(find build-tool/output -maxdepth 2 -name '*.zip' ! -path '*/woocommerce_market/*' | head -1)
+          echo "zip_path=$ZIP" >> $GITHUB_OUTPUT
+          echo "Found zip: $ZIP"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            build-tool/output/freemius/*.zip
+          files: ${{ steps.find-zip.outputs.zip_path }}
           generate_release_notes: true
 
       # --- Mark Freemius tag as released (LAST STEP, Revenues plan only) ---
