@@ -132,11 +132,18 @@ jobs:
           VERSION=${{ steps.config.outputs.version }}
           SLUG=${{ inputs.plugin-slug }}
 
-          # Determine source: Freemius free zip (free+pro) or built output (free-only)
+          # Determine source: Freemius free version, or first available build output
           if [ "${{ steps.freemius-download.outputs.free_version_ready }}" == "true" ]; then
             BUILD_DIR=$(ls -d build-tool/output/wp/*/ | head -1)
           else
-            BUILD_DIR=$(ls -d build-tool/output/freemius/*/ | head -1)
+            # Find first build output directory (could be output/wp/, output/freemius/, etc.)
+            BUILD_DIR=$(find build-tool/output -maxdepth 2 -mindepth 2 -type d ! -path '*/woocommerce_market/*' | head -1)
+          fi
+
+          if [ -z "$BUILD_DIR" ]; then
+            echo "::error::No build output directory found"
+            ls -R build-tool/output/ || true
+            exit 1
           fi
 
           echo "Publishing $SLUG v$VERSION to WordPress.org from $BUILD_DIR"
