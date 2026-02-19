@@ -70,8 +70,10 @@ jobs:
             "--secret_key=${{ secrets.FREEMIUS_SECRET_KEY }}" \
             "--plugin_id=${{ steps.config.outputs.freemius_id }}")
           echo "Freemius response: $RESPONSE"
-          TAG_ID=$(echo "$RESPONSE" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
-          if [ -z "$TAG_ID" ]; then
+          # Extract JSON line and parse tag ID (Freemius returns id as string "108712")
+          JSON_LINE=$(echo "$RESPONSE" | grep '^{' | tail -1)
+          TAG_ID=$(echo "$JSON_LINE" | jq -r '.id')
+          if [ -z "$TAG_ID" ] || [ "$TAG_ID" = "null" ]; then
             echo "::error::Failed to parse tag ID from Freemius response"
             echo "$RESPONSE"
             exit 1
