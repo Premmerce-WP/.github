@@ -188,12 +188,22 @@ jobs:
           path: build-tool/output/woocommerce_market/*.zip
 
       # --- GitHub Release ---
-      - name: Find build zip
+      - name: Find and rename build zip
         id: find-zip
         run: |
-          ZIP=$(find build-tool/output -maxdepth 2 -name '*.zip' ! -path '*/woocommerce_market/*' | head -1)
-          echo "zip_path=$ZIP" >> $GITHUB_OUTPUT
-          echo "Found zip: $ZIP"
+          SLUG=${{ inputs.plugin-slug }}
+          VERSION=${{ steps.config.outputs.version }}
+          # Prefer the freemius build zip (named {slug}.zip), fall back to any zip
+          if [ -f "build-tool/output/freemius/${SLUG}.zip" ]; then
+            ZIP="build-tool/output/freemius/${SLUG}.zip"
+          else
+            ZIP=$(find build-tool/output -maxdepth 2 -name '*.zip' ! -path '*/woocommerce_market/*' ! -path '*/wp/*' | head -1)
+          fi
+          # Rename to {slug}-{version}.zip for the GitHub Release
+          DEST="build-tool/output/${SLUG}-${VERSION}.zip"
+          cp "$ZIP" "$DEST"
+          echo "zip_path=$DEST" >> $GITHUB_OUTPUT
+          echo "Found zip: $ZIP -> $DEST"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
