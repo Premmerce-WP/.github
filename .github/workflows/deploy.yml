@@ -91,18 +91,24 @@ jobs:
           cd build-tool
           TAG_ID=${{ steps.freemius-upload.outputs.tag_id }}
           PLUGIN_ID=${{ steps.config.outputs.freemius_id }}
+          mkdir -p output/wp
           MAX_ATTEMPTS=20
           ATTEMPT=0
-          echo "Waiting for Freemius to process free version (tag $TAG_ID)..."
+          echo "Waiting for Freemius to process free version (tag $TAG_ID, plugin $PLUGIN_ID)..."
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS..."
-            php console plugin:freemius-download \
+            if php console plugin:freemius-download \
               "$TAG_ID" "output/wp" \
               "--plugin_id=$PLUGIN_ID" \
               "--dev_id=${{ secrets.FREEMIUS_DEV_ID }}" \
               "--public_key=${{ secrets.FREEMIUS_PUBLIC_KEY }}" \
-              "--secret_key=${{ secrets.FREEMIUS_SECRET_KEY }}" 2>/dev/null && break
+              "--secret_key=${{ secrets.FREEMIUS_SECRET_KEY }}" 2>&1; then
+              echo "Download command succeeded"
+              break
+            else
+              echo "Download command failed (exit $?)"
+            fi
             if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
               echo "Not ready yet, waiting 15s..."
               sleep 15
@@ -110,8 +116,10 @@ jobs:
           done
           if [ ! -f "output/wp/${PLUGIN_ID}-free.zip" ]; then
             echo "::error::Failed to download free version after $MAX_ATTEMPTS attempts"
+            ls -la output/wp/ || true
             exit 1
           fi
+          echo "Downloaded: $(ls -la output/wp/${PLUGIN_ID}-free.zip)"
           unzip -oq "output/wp/${PLUGIN_ID}-free.zip" -d output/wp
           echo "free_version_ready=true" >> $GITHUB_OUTPUT
           echo "Free version downloaded and extracted"
