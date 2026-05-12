@@ -41,8 +41,11 @@ jobs:
           echo "plugin_type=$(jq -r '.type' release.json)" >> $GITHUB_OUTPUT
           echo "wordpress_org=$(jq -r '.channels.wordpress_org' release.json)" >> $GITHUB_OUTPUT
           echo "woocommerce=$(jq -r '.channels.woocommerce' release.json)" >> $GITHUB_OUTPUT
+          BUILD_SLUG=$(jq -r '.build_slug // empty' release.json)
+          echo "build_slug=${BUILD_SLUG:-${{ inputs.plugin-slug }}}" >> $GITHUB_OUTPUT
           echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
           echo "Plugin: ${{ inputs.plugin-slug }}"
+          echo "Build slug: ${BUILD_SLUG:-${{ inputs.plugin-slug }}}"
           echo "Version: ${GITHUB_REF_NAME}"
           echo "Type: $(jq -r '.type' release.json)"
           echo "Freemius upload: $(jq -r '.channels.freemius' release.json)"
@@ -64,7 +67,7 @@ jobs:
         run: |
           cd build-tool
           RESPONSE=$(php console plugin:freemius-tag \
-            "output/freemius/${{ inputs.plugin-slug }}.zip" \
+            "output/freemius/${{ steps.config.outputs.build_slug }}.zip" \
             "--dev_id=${{ secrets.FREEMIUS_DEV_ID }}" \
             "--public_key=${{ secrets.FREEMIUS_PUBLIC_KEY }}" \
             "--secret_key=${{ secrets.FREEMIUS_SECRET_KEY }}" \
@@ -193,9 +196,10 @@ jobs:
         run: |
           SLUG=${{ inputs.plugin-slug }}
           VERSION=${{ steps.config.outputs.version }}
+          BUILD_SLUG=${{ steps.config.outputs.build_slug }}
           # Prefer the freemius build zip, fall back to any non-free-download zip
-          if [ -f "build-tool/output/freemius/${SLUG}.zip" ]; then
-            ZIP="build-tool/output/freemius/${SLUG}.zip"
+          if [ -f "build-tool/output/freemius/${BUILD_SLUG}.zip" ]; then
+            ZIP="build-tool/output/freemius/${BUILD_SLUG}.zip"
           else
             ZIP=$(find build-tool/output -maxdepth 2 -name '*.zip' ! -name '*-free.zip' ! -path '*/woocommerce_market/*' | head -1)
           fi
